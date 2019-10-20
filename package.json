@@ -1,0 +1,14 @@
+{
+    "name": "vendr",
+    "version": "0.1.0",
+    "description": "Manage vendor files",
+    "main": "index.js",
+    "author": "Erlend Tobiassen <erlend.tobiassen@gmail.com>",
+    "license": "MIT",
+    "bin": {
+        "vendr": "index.js"
+    },
+    "dependencies": {
+        "yargs": "^14.2.0"
+    }
+}
