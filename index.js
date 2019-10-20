@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 
-const http = require('http');
-const https = require('https');
+const fetch = require('node-fetch');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const util = require('util');
+
+const mkdir = util.promisify(fs.mkdir);
+const exists = util.promisify(fs.exists);
 
 require('yargs') // eslint-disable-line
     .command('add <url>', 'install new vendor file', yargs => {
@@ -24,69 +27,74 @@ require('yargs') // eslint-disable-line
 function get(argv) {
     const dors = vendors("vendr.json");
 
-    for ([url, hash] of Object.entries(dors)) {
-        const p = getPath(url);
-        const digest = crypto.createHash('sha512');
+    (async () => {
+        await Promise.all([...Object.entries(dors).map(async ([url, _]) => {
+            try {
+                const p = getPath(url);
 
-        if (fs.existsSync(p)) {
-            fs.createReadStream(p).pipe(digest);
+                if (!(await exists(p))) {
+                    const dir = path.dirname(p);
+                    await mkdir(dir, { recursive: true });
 
-            digest.on("data", function (data) {
-                if (hash === data.toString("hex")) {
-                    console.log(`Existing file ${p} with hash ${hash.slice(0, 10)}... `);
-                } else {
-                    console.error(`Existing file ${p} with incorrect hash!`);
-                    process.exit(-1);
+                    const f = fs.createWriteStream(p);
+
+                    const request = await fetch(url);
+                    request.body.pipe(f);
                 }
-            });
-        } else {
-            fs.mkdirSync(path.dirname(p), { recursive: true });
-            const f = fs.createWriteStream(p);
+            } catch (e) {
+                console.error(e);
+            }
+        })]);
 
-            const request = download(url, function (response) {
-                response.pipe(f);
-                response.pipe(digest);
-            });
+        const results = await Promise.all(Object.entries(dors).map(async ([url, hash]) => {
+            try {
+                const p = getPath(url);
+                const digest = crypto.createHash("sha512");
 
-            digest.on("data", function (data) {
+                fs.createReadStream(p).pipe(digest);
+
+                const data = await new Promise((resolve, reject) => {
+                    digest.on("data", resolve);
+                    digest.on("error", reject);
+                });
+
                 if (hash === data.toString("hex")) {
-                    console.log(`Downloaded ${url} with hash ${hash.slice(0, 10)}... `);
+                    console.log(`File ${p} with hash ${hash.slice(0, 10)}... `);
+                    return false;
                 } else {
-                    console.error(`${url} hash does does not match added file.`);
-                    fs.unlinkSync(p);
-                    process.exit(-1);
+                    console.error(`File ${p} with incorrect hash!`);
+                    return p;
                 }
-            });
+            } catch (e) {
+                console.error(e);
+            }
+        }));
+
+        if (results.some(x => x)) {
+            process.exit(-1);
         }
-    }
+    })();
 }
 
 function add(argv) {
-    const dors = vendors("vendr.json");
+    (async () => {
+        const dors = vendors("vendr.json");
+        const hash = crypto.createHash('sha512');
 
-    const hash = crypto.createHash('sha512');
+        const request = await fetch(argv.url);
+        request.body.pipe(hash);
 
-    const request = download(argv.url, function (response) {
-        response.pipe(hash);
-    });
+        hash.on("data", function (data) {
+            if (dors[argv.url]) {
+                console.error("Url already added");
+                process.exit(-1);
+                return;
+            }
 
-    hash.on("data", function (data) {
-        if (dors[argv.url]) {
-            console.error("Url already added");
-            process.exit(-1);
-            return;
-        }
-
-        dors[argv.url] = data.toString("hex");
-        writeVendors("vendr.json", dors);
-    });
-}
-
-function download(url, ...args) {
-    url = new URL(url);
-    const client = url.protocol == "https:" ? https : http;
-
-    return client.get(url, ...args);
+            dors[argv.url] = data.toString("hex");
+            writeVendors("vendr.json", dors);
+        });
+    })();
 }
 
 function getPath(url) {
